@@ -1,4 +1,5 @@
 use actix_web::{get, App, HttpResponse, HttpServer, Responder};
+use futures::future::join_all;
 use lazy_static::lazy_static;
 use log4rs::{
     append::console::ConsoleAppender,
@@ -69,27 +70,33 @@ fn __init_log() -> AppResult<()> {
 #[get("/{all:.*}")]
 async fn export_metrics() -> impl Responder {
     let time = std::time::SystemTime::now();
-    let mut results = Vec::new();
+    let mut tasks = Vec::new();
 
     for uri in &CONFIG.uri {
-        log::debug!("access: {}", uri);
+        log::debug!("access: {}", &uri);
         if uri.starts_with("http://") || uri.starts_with("https://") {
-            let t1 = std::time::SystemTime::now();
-            results.push(request(uri).await.unwrap_or("".to_owned()));
-            log::info!("http time: {:?}", t1.elapsed().unwrap().as_millis());
+            tasks.push(fetch_metrics(&uri, false));
         } else if uri.starts_with("file://") {
-            let t2 = std::time::SystemTime::now();
-            results.push(
-                read_file(&uri["file://".len()..])
-                    .await
-                    .unwrap_or("".to_owned()),
-            );
-            log::info!("file time: {:?}", t2.elapsed().unwrap().as_millis());
+            tasks.push(fetch_metrics(&uri["file://".len()..], true))
         }
     }
 
-    log::info!("export time: {:?}", time.elapsed().unwrap().as_millis());
+    let results = join_all(tasks)
+        .await
+        .into_iter()
+        .map(|r| r.unwrap_or("".to_owned()))
+        .collect::<Vec<String>>();
+
+    log::debug!("export time: {:?}", time.elapsed().unwrap().as_millis());
     HttpResponse::Ok().body(results.join("\n"))
+}
+
+async fn fetch_metrics(uri: &str, local: bool) -> AppResult<String> {
+    if local {
+        read_file(uri).await
+    } else {
+        fetch_http(uri).await
+    }
 }
 
 async fn read_file(file: &str) -> AppResult<String> {
@@ -101,7 +108,7 @@ async fn read_file(file: &str) -> AppResult<String> {
     }
 }
 
-async fn request(uri: &str) -> AppResult<String> {
-    log::debug!("request: {}", uri);
+async fn fetch_http(uri: &str) -> AppResult<String> {
+    log::debug!("fetch: {}", uri);
     Ok(reqwest::get(uri).await?.text().await?)
 }
