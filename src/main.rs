@@ -7,7 +7,13 @@ use log4rs::{
     encode::pattern::PatternEncoder,
     Config,
 };
-use std::{env, fs, path::Path, str::FromStr, time::SystemTime};
+use reqwest::Client;
+use std::{
+    env, fs,
+    path::Path,
+    str::FromStr,
+    time::{Duration, SystemTime},
+};
 
 lazy_static! {
     // initialze configuration
@@ -26,6 +32,9 @@ lazy_static! {
                         .collect::<Vec<String>>()
                 })
                 .unwrap_or(Vec::new()),
+            timeout: env::var("MERGER_TIMEOUT")
+                .map(|p| p.parse::<u64>().unwrap_or(3))
+                .unwrap_or(3),
             level: env::var("MERGER_LOG_LEVEL").unwrap_or("INFO".to_owned()),
         }
     };
@@ -37,6 +46,7 @@ struct ServerConfig {
     address: String,
     port: u16,
     uris: Vec<String>,
+    timeout: u64,
     level: String,
 }
 
@@ -119,5 +129,8 @@ async fn read_file(file: &str) -> AppResult<String> {
 
 async fn fetch_http(uri: &str) -> AppResult<String> {
     log::debug!("fetch: {}", uri);
-    Ok(reqwest::get(uri).await?.text().await?)
+    let client: Client = Client::builder()
+        .timeout(Duration::from_secs(CONFIG.timeout))
+        .build()?;
+    Ok(client.get(uri).send().await?.text().await?)
 }
